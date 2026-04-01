@@ -8,7 +8,10 @@
         "uid": { "type": "string", "description": "Unique identifier for the user." },
         "email": { "type": "string", "format": "email", "description": "User's email address." },
         "displayName": { "type": "string", "description": "User's display name." },
-        "role": { "type": "string", "enum": ["admin", "user"], "description": "User's role in the application." }
+        "role": { "type": "string", "enum": ["admin", "user"], "description": "User's role in the application." },
+        "plan": { "type": "string", "enum": ["free", "pro"], "description": "User's subscription plan." },
+        "subscriptionStatus": { "type": "string", "enum": ["active", "inactive"], "description": "User's subscription status." },
+        "subscriptionId": { "type": "string", "description": "ID of the subscription from the payment gateway." }
       },
       "required": ["uid", "email"]
     },

@@ -49,10 +49,22 @@ import {
   PieChart as RePieChart,
   Pie
 } from 'recharts';
+import { PayPalScriptProvider, PayPalButtons } from "@paypal/react-paypal-js";
 
 import { auth, db, handleFirestoreError, OperationType } from './firebase';
 import { UserProfile, Category, Expense, CategoryWithStats } from './types';
 import { cn } from './lib/utils';
+
+// --- Razorpay Helper ---
+const loadRazorpay = () => {
+  return new Promise((resolve) => {
+    const script = document.createElement("script");
+    script.src = "https://checkout.razorpay.com/v1/checkout.js";
+    script.onload = () => resolve(true);
+    script.onerror = () => resolve(false);
+    document.body.appendChild(script);
+  });
+};
 
 // --- Contexts ---
 
@@ -125,18 +137,25 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
     const unsubscribe = onAuthStateChanged(auth, async (u) => {
       setUser(u);
       if (u) {
-        const userDoc = await getDoc(doc(db, 'users', u.uid));
+        const userDocRef = doc(db, 'users', u.uid);
+        const userDoc = await getDoc(userDocRef);
         if (!userDoc.exists()) {
           const newProfile: UserProfile = {
             uid: u.uid,
             email: u.email || '',
             displayName: u.displayName || '',
-            role: 'user'
+            role: 'user',
+            plan: 'free',
+            subscriptionStatus: 'inactive'
           };
-          await setDoc(doc(db, 'users', u.uid), newProfile);
+          await setDoc(userDocRef, newProfile);
           setProfile(newProfile);
         } else {
-          setProfile(userDoc.data() as UserProfile);
+          // Listen for profile changes (e.g. subscription updates)
+          const unsubProfile = onSnapshot(userDocRef, (snap) => {
+            if (snap.exists()) setProfile(snap.data() as UserProfile);
+          });
+          return () => unsubProfile();
         }
       } else {
         setProfile(null);
@@ -152,6 +171,7 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
       await signInWithPopup(auth, provider);
     } catch (error) {
       console.error('Sign in error:', error);
+      throw error;
     }
   };
 
@@ -166,8 +186,188 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
   );
 }
 
+function Pricing({ onBack }: { onBack: () => void }) {
+  const { user, profile } = useAuth();
+  const [isProcessing, setIsProcessing] = useState(false);
+
+  const handleRazorpay = async () => {
+    if (!user) return;
+    setIsProcessing(true);
+    const res = await loadRazorpay();
+    if (!res) {
+      alert("Razorpay SDK failed to load. Are you online?");
+      setIsProcessing(false);
+      return;
+    }
+
+    try {
+      const orderRes = await fetch("/api/razorpay/order", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ amount: 499, currency: "INR", receipt: `receipt_${user.uid}` }),
+      });
+      const orderData = await orderRes.json();
+
+      const options = {
+        key: import.meta.env.VITE_RAZORPAY_KEY_ID, // Public key
+        amount: orderData.amount,
+        currency: orderData.currency,
+        name: "SpendWise Pro",
+        description: "Monthly Subscription",
+        order_id: orderData.id,
+        handler: async (response: any) => {
+          const verifyRes = await fetch("/api/razorpay/verify", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(response),
+          });
+          const verifyData = await verifyRes.json();
+          if (verifyData.status === "ok") {
+            await updateDoc(doc(db, "users", user.uid), {
+              plan: "pro",
+              subscriptionStatus: "active",
+              subscriptionId: response.razorpay_payment_id,
+            });
+            alert("Payment successful! You are now a Pro user.");
+            onBack();
+          } else {
+            alert("Payment verification failed.");
+          }
+        },
+        prefill: {
+          name: user.displayName,
+          email: user.email,
+        },
+        theme: { color: "#3b82f6" },
+      };
+
+      const rzp1 = new (window as any).Razorpay(options);
+      rzp1.open();
+    } catch (error) {
+      console.error("Razorpay error:", error);
+      alert("Something went wrong with the payment.");
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-4">
+      <motion.div 
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="max-w-4xl w-full grid grid-cols-1 md:grid-cols-2 gap-8"
+      >
+        {/* Free Plan */}
+        <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-200 flex flex-col">
+          <h3 className="text-xl font-bold text-slate-900 mb-2">Free</h3>
+          <div className="text-4xl font-bold text-slate-900 mb-6">$0<span className="text-lg text-slate-400 font-normal">/mo</span></div>
+          <ul className="space-y-4 mb-8 flex-1">
+            <li className="flex items-center gap-3 text-slate-600">
+              <PlusCircle className="w-5 h-5 text-emerald-500" /> Basic expense tracking
+            </li>
+            <li className="flex items-center gap-3 text-slate-600">
+              <PlusCircle className="w-5 h-5 text-emerald-500" /> Up to 5 categories
+            </li>
+            <li className="flex items-center gap-3 text-slate-600">
+              <PlusCircle className="w-5 h-5 text-emerald-500" /> Community support
+            </li>
+          </ul>
+          <button 
+            onClick={onBack}
+            className="w-full py-3 border border-slate-200 rounded-xl text-slate-600 font-medium hover:bg-slate-50 transition-colors"
+          >
+            {profile?.plan === 'free' ? 'Current Plan' : 'Go Back'}
+          </button>
+        </div>
+
+        {/* Pro Plan */}
+        <div className="bg-white p-8 rounded-2xl shadow-xl border-2 border-blue-600 flex flex-col relative overflow-hidden">
+          <div className="absolute top-0 right-0 bg-blue-600 text-white px-4 py-1 text-xs font-bold rounded-bl-xl">POPULAR</div>
+          <h3 className="text-xl font-bold text-slate-900 mb-2">Pro</h3>
+          <div className="text-4xl font-bold text-slate-900 mb-6">$4.99<span className="text-lg text-slate-400 font-normal">/mo</span></div>
+          <ul className="space-y-4 mb-8 flex-1">
+            <li className="flex items-center gap-3 text-slate-600">
+              <PlusCircle className="w-5 h-5 text-emerald-500" /> Unlimited categories
+            </li>
+            <li className="flex items-center gap-3 text-slate-600">
+              <PlusCircle className="w-5 h-5 text-emerald-500" /> Advanced analytics
+            </li>
+            <li className="flex items-center gap-3 text-slate-600">
+              <PlusCircle className="w-5 h-5 text-emerald-500" /> Priority support
+            </li>
+            <li className="flex items-center gap-3 text-slate-600">
+              <PlusCircle className="w-5 h-5 text-emerald-500" /> CSV Export (Coming soon)
+            </li>
+          </ul>
+          
+          <div className="space-y-4">
+            <button 
+              onClick={handleRazorpay}
+              disabled={isProcessing || profile?.plan === 'pro'}
+              className="w-full py-3 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition-all shadow-lg shadow-blue-200 disabled:opacity-50"
+            >
+              {isProcessing ? 'Processing...' : profile?.plan === 'pro' ? 'Active' : 'Upgrade with Razorpay'}
+            </button>
+
+            <div className="relative">
+              <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-slate-200"></div></div>
+              <div className="relative flex justify-center text-xs uppercase"><span className="bg-white px-2 text-slate-400">Or pay with PayPal</span></div>
+            </div>
+
+            <PayPalScriptProvider options={{ clientId: import.meta.env.VITE_PAYPAL_CLIENT_ID || "test" }}>
+              <PayPalButtons 
+                style={{ layout: "horizontal", height: 48 }}
+                createOrder={(data, actions) => {
+                  return actions.order.create({
+                    intent: "CAPTURE",
+                    purchase_units: [{ amount: { value: "4.99", currency_code: "USD" } }]
+                  });
+                }}
+                onApprove={async (data, actions) => {
+                  if (actions.order) {
+                    const details = await actions.order.capture();
+                    if (user) {
+                      await updateDoc(doc(db, "users", user.uid), {
+                        plan: "pro",
+                        subscriptionStatus: "active",
+                        subscriptionId: details.id,
+                      });
+                      alert("Payment successful! You are now a Pro user.");
+                      onBack();
+                    }
+                  }
+                }}
+              />
+            </PayPalScriptProvider>
+          </div>
+        </div>
+      </motion.div>
+      <button onClick={onBack} className="mt-8 text-slate-400 hover:text-slate-600 flex items-center gap-2">
+        <X className="w-4 h-4" /> Cancel and return to dashboard
+      </button>
+    </div>
+  );
+}
+
 function Login() {
   const { signIn } = useAuth();
+  const [error, setError] = useState<string | null>(null);
+
+  const handleSignIn = async () => {
+    setError(null);
+    try {
+      await signIn();
+    } catch (err: any) {
+      console.error('Sign in error:', err);
+      if (err.code === 'auth/unauthorized-domain') {
+        setError('This domain is not authorized in Firebase. Please add "spendwise-unjj.onrender.com" to your Authorized Domains in the Firebase Console.');
+      } else {
+        setError(err.message || 'An unexpected error occurred during sign in.');
+      }
+    }
+  };
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-slate-50 p-4">
       <motion.div 
@@ -183,8 +383,15 @@ function Login() {
           <p className="text-slate-500 mt-2">Professional Multi-Tenant Expense Tracker</p>
         </div>
         
+        {error && (
+          <div className="mb-6 p-4 bg-red-50 border border-red-100 rounded-xl flex items-start gap-3 text-sm text-red-600">
+            <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
+            <p>{error}</p>
+          </div>
+        )}
+
         <button 
-          onClick={signIn}
+          onClick={handleSignIn}
           className="w-full flex items-center justify-center gap-3 px-6 py-3 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 transition-all shadow-sm font-medium text-slate-700"
         >
           <img src="https://www.google.com/favicon.ico" className="w-5 h-5" alt="Google" />
@@ -199,14 +406,15 @@ function Login() {
   );
 }
 
-function Dashboard() {
-  const { user, logout } = useAuth();
+function Dashboard({ onShowPricing }: { onShowPricing: () => void }) {
+  const { user, profile, logout } = useAuth();
   const [categories, setCategories] = useState<Category[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [isAddingExpense, setIsAddingExpense] = useState(false);
   const [isManagingCategories, setIsManagingCategories] = useState(false);
 
   // --- Data Fetching ---
+  // ... (rest of the component)
 
   useEffect(() => {
     if (!user) return;
@@ -256,6 +464,14 @@ function Dashboard() {
           </div>
           
           <div className="flex items-center gap-4">
+            {profile?.plan === 'free' && (
+              <button 
+                onClick={onShowPricing}
+                className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-amber-100 text-amber-700 rounded-lg hover:bg-amber-200 transition-colors text-xs font-bold border border-amber-200"
+              >
+                <TrendingUp className="w-3.5 h-3.5" /> Upgrade to Pro
+              </button>
+            )}
             <div className="flex items-center gap-2 mr-2">
               <img 
                 src={user?.photoURL || ''} 
@@ -485,7 +701,7 @@ function Dashboard() {
                   </div>
                 ))}
                 
-                {isManagingCategories && <AddCategoryForm user={user!} />}
+                {isManagingCategories && <AddCategoryForm user={user!} count={categories.length} onShowPricing={onShowPricing} />}
               </div>
             </div>
 
@@ -517,13 +733,21 @@ function Dashboard() {
   );
 }
 
-function AddCategoryForm({ user }: { user: User }) {
+function AddCategoryForm({ user, count, onShowPricing }: { user: User, count: number, onShowPricing: () => void }) {
+  const { profile } = useAuth();
   const [name, setName] = useState('');
   const [color, setColor] = useState('#3b82f6');
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name) return;
+    
+    if (profile?.plan === 'free' && count >= 5) {
+      alert("Free plan is limited to 5 categories. Please upgrade to Pro for unlimited categories.");
+      onShowPricing();
+      return;
+    }
+
     try {
       await addDoc(collection(db, 'categories'), {
         uid: user.uid,
@@ -679,6 +903,7 @@ function ExpenseModal({ onClose, categories, user }: { onClose: () => void, cate
 
 function AppContent() {
   const { user, loading } = useAuth();
+  const [view, setView] = useState<'dashboard' | 'pricing'>('dashboard');
 
   if (loading) {
     return (
@@ -688,7 +913,13 @@ function AppContent() {
     );
   }
 
-  return user ? <Dashboard /> : <Login />;
+  if (!user) return <Login />;
+
+  return view === 'pricing' ? (
+    <Pricing onBack={() => setView('dashboard')} />
+  ) : (
+    <Dashboard onShowPricing={() => setView('pricing')} />
+  );
 }
 
 export default function App() {

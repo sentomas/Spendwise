@@ -5,6 +5,9 @@ export interface UserProfile {
   email: string;
   displayName?: string;
   role: 'admin' | 'user';
+  plan?: 'free' | 'pro';
+  subscriptionStatus?: 'active' | 'inactive';
+  subscriptionId?: string;
 }
 
 export interface Category {

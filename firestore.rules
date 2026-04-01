@@ -13,6 +13,9 @@ service cloud.firestore {
     //   - email: string (required, format: email)
     //   - displayName: string (optional)
     //   - role: string (required, enum: ['admin', 'user'])
+    //   - plan: string (optional, enum: ['free', 'pro'])
+    //   - subscriptionStatus: string (optional, enum: ['active', 'inactive'])
+    //   - subscriptionId: string (optional)
     //
     // Collection: categories
     // Document ID: categoryId
@@ -71,7 +74,10 @@ service cloud.firestore {
       return data.keys().hasAll(['uid', 'email', 'role']) &&
              data.uid is string && data.uid.size() > 0 &&
              data.email is string && isValidEmail(data.email) &&
-             data.role in ['admin', 'user'];
+             data.role in ['admin', 'user'] &&
+             (!('plan' in data) || data.plan in ['free', 'pro']) &&
+             (!('subscriptionStatus' in data) || data.subscriptionStatus in ['active', 'inactive']) &&
+             (!('subscriptionId' in data) || data.subscriptionId is string);
     }
 
     function isValidCategory(data) {
