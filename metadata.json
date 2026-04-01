@@ -1,0 +1,5 @@
+{
+  "name": "SpendWise Multi-Tenant SaaS",
+  "description": "A professional multi-tenant expense tracker built for scalability, featuring real-time analytics and strict data isolation.",
+  "requestFramePermissions": []
+}

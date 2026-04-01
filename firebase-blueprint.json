@@ -1,0 +1,54 @@
+{
+  "entities": {
+    "users": {
+      "title": "User Profile",
+      "description": "User profile information and roles.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Unique identifier for the user." },
+        "email": { "type": "string", "format": "email", "description": "User's email address." },
+        "displayName": { "type": "string", "description": "User's display name." },
+        "role": { "type": "string", "enum": ["admin", "user"], "description": "User's role in the application." }
+      },
+      "required": ["uid", "email"]
+    },
+    "categories": {
+      "title": "Expense Category",
+      "description": "Custom categories for expenses.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Owner's user ID." },
+        "name": { "type": "string", "description": "Category name." },
+        "color": { "type": "string", "description": "Hex color code for the category." }
+      },
+      "required": ["uid", "name"]
+    },
+    "expenses": {
+      "title": "Expense Record",
+      "description": "Individual expense records.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Owner's user ID." },
+        "amount": { "type": "number", "description": "Amount spent." },
+        "categoryId": { "type": "string", "description": "ID of the category." },
+        "description": { "type": "string", "description": "Description of the expense." },
+        "date": { "type": "string", "format": "date-time", "description": "Date of the expense." }
+      },
+      "required": ["uid", "amount", "categoryId", "date"]
+    }
+  },
+  "firestore": {
+    "users/{userId}": {
+      "schema": "users",
+      "description": "User profile documents."
+    },
+    "categories/{categoryId}": {
+      "schema": "categories",
+      "description": "User-defined expense categories."
+    },
+    "expenses/{expenseId}": {
+      "schema": "expenses",
+      "description": "User expense records."
+    }
+  }
+}
