@@ -34,9 +34,10 @@ async function startServer() {
     if (!rzp) return res.status(503).json({ error: "Razorpay not configured" });
 
     const { amount, currency = "INR", receipt } = req.body;
+
     try {
       const order = await rzp.orders.create({
-        amount: amount * 100, // amount in smallest currency unit
+        amount: amount, // amount in smallest currency unit
         currency,
         receipt,
       });

@@ -8,6 +8,9 @@ export interface UserProfile {
   plan?: 'free' | 'pro';
   subscriptionStatus?: 'active' | 'inactive';
   subscriptionId?: string;
+  subscriptionEndDate?: Timestamp;
+  billingCycle?: 'monthly' | 'yearly';
+  trialStartedAt?: Timestamp;
 }
 
 export interface Category {
@@ -22,6 +25,14 @@ export interface Expense {
   uid: string;
   amount: number;
   categoryId: string;
+  description?: string;
+  date: Timestamp;
+}
+
+export interface Income {
+  id: string;
+  uid: string;
+  amount: number;
   description?: string;
   date: Timestamp;
 }

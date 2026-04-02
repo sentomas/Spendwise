@@ -16,6 +16,8 @@ service cloud.firestore {
     //   - plan: string (optional, enum: ['free', 'pro'])
     //   - subscriptionStatus: string (optional, enum: ['active', 'inactive'])
     //   - subscriptionId: string (optional)
+    //   - subscriptionEndDate: timestamp (optional)
+    //   - billingCycle: string (optional, enum: ['monthly', 'yearly'])
     //
     // Collection: categories
     // Document ID: categoryId
@@ -30,6 +32,14 @@ service cloud.firestore {
     //   - uid: string (required, immutable, owner)
     //   - amount: number (required, positive)
     //   - categoryId: string (required)
+    //   - description: string (optional, max: 200)
+    //   - date: timestamp (required)
+    //
+    // Collection: incomes
+    // Document ID: incomeId
+    // Fields:
+    //   - uid: string (required, immutable, owner)
+    //   - amount: number (required, positive)
     //   - description: string (optional, max: 200)
     //   - date: timestamp (required)
     //
@@ -77,7 +87,9 @@ service cloud.firestore {
              data.role in ['admin', 'user'] &&
              (!('plan' in data) || data.plan in ['free', 'pro']) &&
              (!('subscriptionStatus' in data) || data.subscriptionStatus in ['active', 'inactive']) &&
-             (!('subscriptionId' in data) || data.subscriptionId is string);
+             (!('subscriptionId' in data) || data.subscriptionId is string) &&
+             (!('subscriptionEndDate' in data) || data.subscriptionEndDate is timestamp) &&
+             (!('billingCycle' in data) || data.billingCycle in ['monthly', 'yearly']);
     }
 
     function isValidCategory(data) {
@@ -92,6 +104,14 @@ service cloud.firestore {
              data.uid is string && data.uid == request.auth.uid &&
              data.amount is number && data.amount > 0 &&
              data.categoryId is string &&
+             (data.get('description', '') is string && data.get('description', '').size() <= 200) &&
+             data.date is timestamp;
+    }
+
+    function isValidIncome(data) {
+      return data.keys().hasAll(['uid', 'amount', 'date']) &&
+             data.uid is string && data.uid == request.auth.uid &&
+             data.amount is number && data.amount > 0 &&
              (data.get('description', '') is string && data.get('description', '').size() <= 200) &&
              data.date is timestamp;
     }
@@ -121,6 +141,14 @@ service cloud.firestore {
       allow read: if isDocOwner() || isAdmin();
       allow create: if isAuthenticated() && isValidExpense(request.resource.data);
       allow update: if isDocOwner() && isValidExpense(request.resource.data) &&
+                      request.resource.data.uid == resource.data.uid;
+      allow delete: if isDocOwner() || isAdmin();
+    }
+
+    match /incomes/{incomeId} {
+      allow read: if isDocOwner() || isAdmin();
+      allow create: if isAuthenticated() && isValidIncome(request.resource.data);
+      allow update: if isDocOwner() && isValidIncome(request.resource.data) &&
                       request.resource.data.uid == resource.data.uid;
       allow delete: if isDocOwner() || isAdmin();
     }

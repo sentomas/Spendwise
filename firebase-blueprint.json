@@ -11,7 +11,9 @@
         "role": { "type": "string", "enum": ["admin", "user"], "description": "User's role in the application." },
         "plan": { "type": "string", "enum": ["free", "pro"], "description": "User's subscription plan." },
         "subscriptionStatus": { "type": "string", "enum": ["active", "inactive"], "description": "User's subscription status." },
-        "subscriptionId": { "type": "string", "description": "ID of the subscription from the payment gateway." }
+        "subscriptionId": { "type": "string", "description": "ID of the subscription from the payment gateway." },
+        "subscriptionEndDate": { "type": "string", "format": "date-time", "description": "When the subscription expires." },
+        "billingCycle": { "type": "string", "enum": ["monthly", "yearly"], "description": "The billing cycle of the subscription." }
       },
       "required": ["uid", "email"]
     },
@@ -38,6 +40,18 @@
         "date": { "type": "string", "format": "date-time", "description": "Date of the expense." }
       },
       "required": ["uid", "amount", "categoryId", "date"]
+    },
+    "incomes": {
+      "title": "Income Record",
+      "description": "Individual income records.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Owner's user ID." },
+        "amount": { "type": "number", "description": "Amount earned." },
+        "description": { "type": "string", "description": "Description of the income." },
+        "date": { "type": "string", "format": "date-time", "description": "Date of the income." }
+      },
+      "required": ["uid", "amount", "date"]
     }
   },
   "firestore": {
@@ -52,6 +66,10 @@
     "expenses/{expenseId}": {
       "schema": "expenses",
       "description": "User expense records."
+    },
+    "incomes/{incomeId}": {
+      "schema": "incomes",
+      "description": "User income records."
     }
   }
 }

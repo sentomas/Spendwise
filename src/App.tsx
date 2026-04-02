@@ -52,7 +52,7 @@ import {
 import { PayPalScriptProvider, PayPalButtons } from "@paypal/react-paypal-js";
 
 import { auth, db, handleFirestoreError, OperationType } from './firebase';
-import { UserProfile, Category, Expense, CategoryWithStats } from './types';
+import { UserProfile, Category, Expense, Income, CategoryWithStats } from './types';
 import { cn } from './lib/utils';
 
 // --- Razorpay Helper ---
@@ -134,35 +134,57 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    let unsubProfile: (() => void) | null = null;
+
     const unsubscribe = onAuthStateChanged(auth, async (u) => {
       setUser(u);
+      
+      // Clean up previous profile listener
+      if (unsubProfile) {
+        unsubProfile();
+        unsubProfile = null;
+      }
+
       if (u) {
-        const userDocRef = doc(db, 'users', u.uid);
-        const userDoc = await getDoc(userDocRef);
-        if (!userDoc.exists()) {
-          const newProfile: UserProfile = {
-            uid: u.uid,
-            email: u.email || '',
-            displayName: u.displayName || '',
-            role: 'user',
-            plan: 'free',
-            subscriptionStatus: 'inactive'
-          };
-          await setDoc(userDocRef, newProfile);
-          setProfile(newProfile);
-        } else {
-          // Listen for profile changes (e.g. subscription updates)
-          const unsubProfile = onSnapshot(userDocRef, (snap) => {
-            if (snap.exists()) setProfile(snap.data() as UserProfile);
+        try {
+          const userDocRef = doc(db, 'users', u.uid);
+          const userDoc = await getDoc(userDocRef);
+          
+          if (!userDoc.exists()) {
+            const newProfile: UserProfile = {
+              uid: u.uid,
+              email: u.email || '',
+              displayName: u.displayName || '',
+              role: 'user',
+              plan: 'free',
+              subscriptionStatus: 'inactive',
+              trialStartedAt: Timestamp.now()
+            };
+            await setDoc(userDocRef, newProfile);
+            setProfile(newProfile);
+          }
+
+          // Always listen for profile changes if user exists
+          unsubProfile = onSnapshot(userDocRef, (snap) => {
+            if (snap.exists()) {
+              setProfile(snap.data() as UserProfile);
+            }
+          }, (err) => {
+            console.error("Profile listener error:", err);
           });
-          return () => unsubProfile();
+        } catch (err) {
+          console.error("Error fetching profile:", err);
         }
       } else {
         setProfile(null);
       }
       setLoading(false);
     });
-    return unsubscribe;
+
+    return () => {
+      unsubscribe();
+      if (unsubProfile) unsubProfile();
+    };
   }, []);
 
   const signIn = async () => {
@@ -189,6 +211,21 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
 function Pricing({ onBack }: { onBack: () => void }) {
   const { user, profile } = useAuth();
   const [isProcessing, setIsProcessing] = useState(false);
+  const [billingCycle, setBillingCycle] = useState<'monthly' | 'yearly'>('monthly');
+  const [country, setCountry] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch('https://ipapi.co/json/')
+      .then(res => res.json())
+      .then(data => setCountry(data.country_code))
+      .catch(err => console.error("Error fetching country:", err));
+  }, []);
+
+  const isIndia = country === 'IN';
+  const currency = isIndia ? 'INR' : 'USD';
+  const monthlyPrice = isIndia ? 50 : 4.99;
+  const yearlyPrice = isIndia ? 40 : 3.99; // Roughly 20% off
+  const yearlyTotal = isIndia ? 480 : 47.88;
 
   const handleRazorpay = async () => {
     if (!user) return;
@@ -201,19 +238,24 @@ function Pricing({ onBack }: { onBack: () => void }) {
     }
 
     try {
+      const amount = billingCycle === 'monthly' ? monthlyPrice : yearlyPrice * 12;
       const orderRes = await fetch("/api/razorpay/order", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ amount: 499, currency: "INR", receipt: `receipt_${user.uid}` }),
+        body: JSON.stringify({ 
+          amount: amount * 100,
+          currency: currency, 
+          receipt: `receipt_${user.uid}` 
+        }),
       });
       const orderData = await orderRes.json();
 
       const options = {
-        key: import.meta.env.VITE_RAZORPAY_KEY_ID, // Public key
+        key: import.meta.env.VITE_RAZORPAY_KEY_ID,
         amount: orderData.amount,
         currency: orderData.currency,
         name: "SpendWise Pro",
-        description: "Monthly Subscription",
+        description: `${billingCycle.charAt(0).toUpperCase() + billingCycle.slice(1)} Subscription`,
         order_id: orderData.id,
         handler: async (response: any) => {
           const verifyRes = await fetch("/api/razorpay/verify", {
@@ -223,12 +265,18 @@ function Pricing({ onBack }: { onBack: () => void }) {
           });
           const verifyData = await verifyRes.json();
           if (verifyData.status === "ok") {
+            const endDate = new Date();
+            if (billingCycle === 'monthly') endDate.setDate(endDate.getDate() + 30);
+            else endDate.setDate(endDate.getDate() + 365);
+
             await updateDoc(doc(db, "users", user.uid), {
               plan: "pro",
               subscriptionStatus: "active",
               subscriptionId: response.razorpay_payment_id,
+              subscriptionEndDate: Timestamp.fromDate(endDate),
+              billingCycle: billingCycle
             });
-            alert("Payment successful! You are now a Pro user.");
+            alert(`Payment successful! You are now a Pro user until ${format(endDate, 'MMM dd, yyyy')}.`);
             onBack();
           } else {
             alert("Payment verification failed.");
@@ -253,6 +301,28 @@ function Pricing({ onBack }: { onBack: () => void }) {
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-4">
+      <div className="text-center mb-12">
+        <h2 className="text-4xl font-extrabold text-slate-900 mb-4">Choose Your Plan</h2>
+        <p className="text-slate-500 text-lg">Unlock the full power of professional expense tracking.</p>
+        
+        {/* Toggle */}
+        <div className="mt-8 flex items-center justify-center gap-4">
+          <span className={cn("text-sm font-medium", billingCycle === 'monthly' ? "text-slate-900" : "text-slate-400")}>Monthly</span>
+          <button 
+            onClick={() => setBillingCycle(billingCycle === 'monthly' ? 'yearly' : 'monthly')}
+            className="w-12 h-6 bg-slate-200 rounded-full relative transition-colors"
+          >
+            <motion.div 
+              animate={{ x: billingCycle === 'monthly' ? 2 : 26 }}
+              className="absolute top-1 w-4 h-4 bg-blue-600 rounded-full shadow-sm"
+            />
+          </button>
+          <span className={cn("text-sm font-medium", billingCycle === 'yearly' ? "text-slate-900" : "text-slate-400")}>
+            Yearly <span className="text-emerald-500 text-xs font-bold ml-1">SAVE 20%</span>
+          </span>
+        </div>
+      </div>
+
       <motion.div 
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
@@ -260,17 +330,17 @@ function Pricing({ onBack }: { onBack: () => void }) {
       >
         {/* Free Plan */}
         <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-200 flex flex-col">
-          <h3 className="text-xl font-bold text-slate-900 mb-2">Free</h3>
-          <div className="text-4xl font-bold text-slate-900 mb-6">$0<span className="text-lg text-slate-400 font-normal">/mo</span></div>
+          <h3 className="text-xl font-bold text-slate-900 mb-2">Free Trial</h3>
+          <div className="text-4xl font-bold text-slate-900 mb-6">{isIndia ? '₹' : '$'}0<span className="text-lg text-slate-400 font-normal">/mo</span></div>
           <ul className="space-y-4 mb-8 flex-1">
+            <li className="flex items-center gap-3 text-slate-600">
+              <PlusCircle className="w-5 h-5 text-emerald-500" /> 7-day full trial
+            </li>
             <li className="flex items-center gap-3 text-slate-600">
               <PlusCircle className="w-5 h-5 text-emerald-500" /> Basic expense tracking
             </li>
             <li className="flex items-center gap-3 text-slate-600">
               <PlusCircle className="w-5 h-5 text-emerald-500" /> Up to 5 categories
-            </li>
-            <li className="flex items-center gap-3 text-slate-600">
-              <PlusCircle className="w-5 h-5 text-emerald-500" /> Community support
             </li>
           </ul>
           <button 
@@ -285,7 +355,13 @@ function Pricing({ onBack }: { onBack: () => void }) {
         <div className="bg-white p-8 rounded-2xl shadow-xl border-2 border-blue-600 flex flex-col relative overflow-hidden">
           <div className="absolute top-0 right-0 bg-blue-600 text-white px-4 py-1 text-xs font-bold rounded-bl-xl">POPULAR</div>
           <h3 className="text-xl font-bold text-slate-900 mb-2">Pro</h3>
-          <div className="text-4xl font-bold text-slate-900 mb-6">$4.99<span className="text-lg text-slate-400 font-normal">/mo</span></div>
+          <div className="text-4xl font-bold text-slate-900 mb-6">
+            {isIndia ? '₹' : '$'}{billingCycle === 'monthly' ? monthlyPrice : yearlyPrice}
+            <span className="text-lg text-slate-400 font-normal">/mo</span>
+          </div>
+          <p className="text-xs text-slate-400 mb-6">
+            {billingCycle === 'monthly' ? `Billed monthly` : `Billed annually (${isIndia ? '₹' : '$'}${yearlyTotal}/yr)`}
+          </p>
           <ul className="space-y-4 mb-8 flex-1">
             <li className="flex items-center gap-3 text-slate-600">
               <PlusCircle className="w-5 h-5 text-emerald-500" /> Unlimited categories
@@ -304,42 +380,53 @@ function Pricing({ onBack }: { onBack: () => void }) {
           <div className="space-y-4">
             <button 
               onClick={handleRazorpay}
-              disabled={isProcessing || profile?.plan === 'pro'}
+              disabled={isProcessing || (profile?.plan === 'pro' && profile?.billingCycle === billingCycle)}
               className="w-full py-3 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition-all shadow-lg shadow-blue-200 disabled:opacity-50"
             >
-              {isProcessing ? 'Processing...' : profile?.plan === 'pro' ? 'Active' : 'Upgrade with Razorpay'}
+              {isProcessing ? 'Processing...' : (profile?.plan === 'pro' && profile?.billingCycle === billingCycle) ? 'Active' : `Upgrade ${billingCycle}`}
             </button>
 
-            <div className="relative">
-              <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-slate-200"></div></div>
-              <div className="relative flex justify-center text-xs uppercase"><span className="bg-white px-2 text-slate-400">Or pay with PayPal</span></div>
-            </div>
+            {!isIndia && (
+              <>
+                <div className="relative">
+                  <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-slate-200"></div></div>
+                  <div className="relative flex justify-center text-xs uppercase"><span className="bg-white px-2 text-slate-400">Or pay with PayPal</span></div>
+                </div>
 
-            <PayPalScriptProvider options={{ clientId: import.meta.env.VITE_PAYPAL_CLIENT_ID || "test" }}>
-              <PayPalButtons 
-                style={{ layout: "horizontal", height: 48 }}
-                createOrder={(data, actions) => {
-                  return actions.order.create({
-                    intent: "CAPTURE",
-                    purchase_units: [{ amount: { value: "4.99", currency_code: "USD" } }]
-                  });
-                }}
-                onApprove={async (data, actions) => {
-                  if (actions.order) {
-                    const details = await actions.order.capture();
-                    if (user) {
-                      await updateDoc(doc(db, "users", user.uid), {
-                        plan: "pro",
-                        subscriptionStatus: "active",
-                        subscriptionId: details.id,
+                <PayPalScriptProvider options={{ clientId: import.meta.env.VITE_PAYPAL_CLIENT_ID || "test" }}>
+                  <PayPalButtons 
+                    style={{ layout: "horizontal", height: 48 }}
+                    createOrder={(data, actions) => {
+                      const amount = billingCycle === 'monthly' ? "4.99" : "47.88";
+                      return actions.order.create({
+                        intent: "CAPTURE",
+                        purchase_units: [{ amount: { value: amount, currency_code: "USD" } }]
                       });
-                      alert("Payment successful! You are now a Pro user.");
-                      onBack();
-                    }
-                  }
-                }}
-              />
-            </PayPalScriptProvider>
+                    }}
+                    onApprove={async (data, actions) => {
+                      if (actions.order) {
+                        const details = await actions.order.capture();
+                        if (user) {
+                          const endDate = new Date();
+                          if (billingCycle === 'monthly') endDate.setDate(endDate.getDate() + 30);
+                          else endDate.setDate(endDate.getDate() + 365);
+
+                          await updateDoc(doc(db, "users", user.uid), {
+                            plan: "pro",
+                            subscriptionStatus: "active",
+                            subscriptionId: details.id,
+                            subscriptionEndDate: Timestamp.fromDate(endDate),
+                            billingCycle: billingCycle
+                          });
+                          alert(`Payment successful! You are now a Pro user until ${format(endDate, 'MMM dd, yyyy')}.`);
+                          onBack();
+                        }
+                      }
+                    }}
+                  />
+                </PayPalScriptProvider>
+              </>
+            )}
           </div>
         </div>
       </motion.div>
@@ -410,8 +497,18 @@ function Dashboard({ onShowPricing }: { onShowPricing: () => void }) {
   const { user, profile, logout } = useAuth();
   const [categories, setCategories] = useState<Category[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [incomes, setIncomes] = useState<Income[]>([]);
   const [isAddingExpense, setIsAddingExpense] = useState(false);
+  const [isAddingIncome, setIsAddingIncome] = useState(false);
   const [isManagingCategories, setIsManagingCategories] = useState(false);
+
+  const daysLeft = useMemo(() => {
+    if (!profile?.subscriptionEndDate) return null;
+    const end = profile.subscriptionEndDate.toDate();
+    const now = new Date();
+    const diff = end.getTime() - now.getTime();
+    return Math.max(0, Math.ceil(diff / (1000 * 60 * 60 * 24)));
+  }, [profile]);
 
   // --- Data Fetching ---
   // ... (rest of the component)
@@ -429,16 +526,25 @@ function Dashboard({ onShowPricing }: { onShowPricing: () => void }) {
       setExpenses(snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Expense)).sort((a, b) => b.date.toMillis() - a.date.toMillis()));
     }, (err) => handleFirestoreError(err, OperationType.LIST, 'expenses'));
 
+    const qIncomes = query(collection(db, 'incomes'), where('uid', '==', user.uid));
+    const unsubIncomes = onSnapshot(qIncomes, (snapshot) => {
+      setIncomes(snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Income)).sort((a, b) => b.date.toMillis() - a.date.toMillis()));
+    }, (err) => handleFirestoreError(err, OperationType.LIST, 'incomes'));
+
     return () => {
       unsubCategories();
       unsubExpenses();
+      unsubIncomes();
     };
   }, [user]);
 
   // --- Stats ---
 
   const stats = useMemo(() => {
-    const total = expenses.reduce((sum, e) => sum + e.amount, 0);
+    const totalExpenses = expenses.reduce((sum, e) => sum + e.amount, 0);
+    const totalIncome = incomes.reduce((sum, i) => sum + i.amount, 0);
+    const expenseRatio = totalIncome > 0 ? (totalExpenses / totalIncome) * 100 : 0;
+
     const byCategory = categories.map(cat => {
       const catExpenses = expenses.filter(e => e.categoryId === cat.id);
       return {
@@ -448,8 +554,8 @@ function Dashboard({ onShowPricing }: { onShowPricing: () => void }) {
       } as CategoryWithStats;
     }).sort((a, b) => b.total - a.total);
 
-    return { total, byCategory };
-  }, [expenses, categories]);
+    return { totalExpenses, totalIncome, expenseRatio, byCategory };
+  }, [expenses, categories, incomes]);
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -464,13 +570,25 @@ function Dashboard({ onShowPricing }: { onShowPricing: () => void }) {
           </div>
           
           <div className="flex items-center gap-4">
-            {profile?.plan === 'free' && (
+            {profile?.plan === 'free' ? (
               <button 
                 onClick={onShowPricing}
                 className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-amber-100 text-amber-700 rounded-lg hover:bg-amber-200 transition-colors text-xs font-bold border border-amber-200"
               >
                 <TrendingUp className="w-3.5 h-3.5" /> Upgrade to Pro
               </button>
+            ) : (
+              <div className="flex items-center gap-2">
+                <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-emerald-50 text-emerald-700 rounded-lg border border-emerald-100 text-xs font-bold">
+                  <Calendar className="w-3.5 h-3.5" /> {daysLeft} days left
+                </div>
+                <button 
+                  onClick={onShowPricing}
+                  className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 transition-colors text-xs font-bold border border-blue-200"
+                >
+                  Renew
+                </button>
+              </div>
             )}
             <div className="flex items-center gap-2 mr-2">
               <img 
@@ -496,19 +614,47 @@ function Dashboard({ onShowPricing }: { onShowPricing: () => void }) {
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Summary Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+          <motion.div 
+            whileHover={{ y: -2 }}
+            className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200"
+          >
+            <div className="flex items-center justify-between mb-4">
+              <div className="p-2 bg-red-50 text-red-600 rounded-lg">
+                <TrendingUp className="w-6 h-6" />
+              </div>
+              <span className="text-xs font-medium text-slate-400 uppercase tracking-wider">Total Expenses</span>
+            </div>
+            <div className="text-3xl font-bold text-slate-900">${stats.totalExpenses.toLocaleString()}</div>
+            <div className="text-sm text-slate-500 mt-1">Across {expenses.length} transactions</div>
+          </motion.div>
+
+          <motion.div 
+            whileHover={{ y: -2 }}
+            className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200"
+          >
+            <div className="flex items-center justify-between mb-4">
+              <div className="p-2 bg-emerald-50 text-emerald-600 rounded-lg">
+                <PlusCircle className="w-6 h-6" />
+              </div>
+              <span className="text-xs font-medium text-slate-400 uppercase tracking-wider">Total Income</span>
+            </div>
+            <div className="text-3xl font-bold text-slate-900">${stats.totalIncome.toLocaleString()}</div>
+            <div className="text-sm text-slate-500 mt-1">Across {incomes.length} records</div>
+          </motion.div>
+
           <motion.div 
             whileHover={{ y: -2 }}
             className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200"
           >
             <div className="flex items-center justify-between mb-4">
               <div className="p-2 bg-blue-50 text-blue-600 rounded-lg">
-                <DollarSign className="w-6 h-6" />
+                <PieChart className="w-6 h-6" />
               </div>
-              <span className="text-xs font-medium text-slate-400 uppercase tracking-wider">Total Expenses</span>
+              <span className="text-xs font-medium text-slate-400 uppercase tracking-wider">Expense Ratio</span>
             </div>
-            <div className="text-3xl font-bold text-slate-900">${stats.total.toLocaleString()}</div>
-            <div className="text-sm text-slate-500 mt-1">Across {expenses.length} transactions</div>
+            <div className="text-3xl font-bold text-slate-900">{stats.expenseRatio.toFixed(1)}%</div>
+            <div className="text-sm text-slate-500 mt-1">Expenses vs Income</div>
           </motion.div>
 
           <motion.div 
@@ -527,22 +673,6 @@ function Dashboard({ onShowPricing }: { onShowPricing: () => void }) {
             <div className="text-sm text-slate-500 mt-1">
               ${stats.byCategory[0]?.total.toLocaleString() || 0} spent
             </div>
-          </motion.div>
-
-          <motion.div 
-            whileHover={{ y: -2 }}
-            className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200"
-          >
-            <div className="flex items-center justify-between mb-4">
-              <div className="p-2 bg-emerald-50 text-emerald-600 rounded-lg">
-                <TrendingUp className="w-6 h-6" />
-              </div>
-              <span className="text-xs font-medium text-slate-400 uppercase tracking-wider">Avg. Transaction</span>
-            </div>
-            <div className="text-3xl font-bold text-slate-900">
-              ${expenses.length > 0 ? (stats.total / expenses.length).toFixed(2) : '0.00'}
-            </div>
-            <div className="text-sm text-slate-500 mt-1">Per expense item</div>
           </motion.div>
         </div>
 
@@ -585,6 +715,12 @@ function Dashboard({ onShowPricing }: { onShowPricing: () => void }) {
               <div className="p-6 border-b border-slate-100 flex items-center justify-between">
                 <h2 className="text-lg font-bold text-slate-900">Recent Expenses</h2>
                 <div className="flex gap-2">
+                  <button 
+                    onClick={() => setIsAddingIncome(true)}
+                    className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors text-sm font-medium"
+                  >
+                    <Plus className="w-4 h-4" /> Add Income
+                  </button>
                   <button 
                     onClick={() => setIsAddingExpense(true)}
                     className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium"
@@ -661,6 +797,68 @@ function Dashboard({ onShowPricing }: { onShowPricing: () => void }) {
                 </table>
               </div>
             </div>
+
+            {/* Income List */}
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+              <div className="p-6 border-b border-slate-100 flex items-center justify-between">
+                <h2 className="text-lg font-bold text-slate-900">Recent Income</h2>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left">
+                  <thead className="bg-slate-50 text-slate-500 text-xs uppercase tracking-wider">
+                    <tr>
+                      <th className="px-6 py-4 font-semibold">Date</th>
+                      <th className="px-6 py-4 font-semibold">Description</th>
+                      <th className="px-6 py-4 font-semibold text-right">Amount</th>
+                      <th className="px-6 py-4 font-semibold text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    <AnimatePresence mode='popLayout'>
+                      {incomes.length > 0 ? incomes.map(income => (
+                        <motion.tr 
+                          key={income.id}
+                          initial={{ opacity: 0 }}
+                          animate={{ opacity: 1 }}
+                          exit={{ opacity: 0, x: -20 }}
+                          className="hover:bg-slate-50 transition-colors"
+                        >
+                          <td className="px-6 py-4 text-sm text-slate-600">
+                            {format(income.date.toDate(), 'MMM dd, yyyy')}
+                          </td>
+                          <td className="px-6 py-4 text-sm text-slate-900 font-medium">
+                            {income.description || '-'}
+                          </td>
+                          <td className="px-6 py-4 text-sm text-emerald-600 font-bold text-right">
+                            +${income.amount.toLocaleString()}
+                          </td>
+                          <td className="px-6 py-4 text-right">
+                            <button 
+                              onClick={async () => {
+                                try {
+                                  await deleteDoc(doc(db, 'incomes', income.id));
+                                } catch (err) {
+                                  handleFirestoreError(err, OperationType.DELETE, `incomes/${income.id}`);
+                                }
+                              }}
+                              className="p-2 text-slate-400 hover:text-red-600 transition-colors"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </td>
+                        </motion.tr>
+                      )) : (
+                        <tr>
+                          <td colSpan={4} className="px-6 py-12 text-center text-slate-400 italic">
+                            No income records yet.
+                          </td>
+                        </tr>
+                      )}
+                    </AnimatePresence>
+                  </tbody>
+                </table>
+              </div>
+            </div>
           </div>
 
           {/* Sidebar */}
@@ -725,6 +923,12 @@ function Dashboard({ onShowPricing }: { onShowPricing: () => void }) {
           <ExpenseModal 
             onClose={() => setIsAddingExpense(false)} 
             categories={categories}
+            user={user!}
+          />
+        )}
+        {isAddingIncome && (
+          <IncomeModal 
+            onClose={() => setIsAddingIncome(false)} 
             user={user!}
           />
         )}
@@ -901,9 +1105,119 @@ function ExpenseModal({ onClose, categories, user }: { onClose: () => void, cate
   );
 }
 
+function IncomeModal({ onClose, user }: { onClose: () => void, user: User }) {
+  const [amount, setAmount] = useState('');
+  const [description, setDescription] = useState('');
+  const [date, setDate] = useState(format(new Date(), 'yyyy-MM-dd'));
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!amount || !date) return;
+    
+    try {
+      await addDoc(collection(db, 'incomes'), {
+        uid: user.uid,
+        amount: parseFloat(amount),
+        description,
+        date: Timestamp.fromDate(new Date(date))
+      });
+      onClose();
+    } catch (err) {
+      handleFirestoreError(err, OperationType.CREATE, 'incomes');
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+      <motion.div 
+        initial={{ opacity: 0, scale: 0.95 }}
+        animate={{ opacity: 1, scale: 1 }}
+        exit={{ opacity: 0, scale: 0.95 }}
+        className="bg-white w-full max-w-md rounded-2xl shadow-2xl overflow-hidden"
+      >
+        <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-emerald-50">
+          <h2 className="text-xl font-bold text-emerald-900">Add Income</h2>
+          <button onClick={onClose} className="p-2 hover:bg-emerald-100 rounded-lg transition-colors">
+            <X className="w-5 h-5 text-emerald-600" />
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="p-6 space-y-4">
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Amount ($)</label>
+              <div className="relative">
+                <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                <input 
+                  type="number" 
+                  step="0.01"
+                  required
+                  value={amount}
+                  onChange={e => setAmount(e.target.value)}
+                  placeholder="0.00"
+                  className="w-full pl-10 pr-4 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none"
+                />
+              </div>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Date</label>
+              <div className="relative">
+                <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                <input 
+                  type="date" 
+                  required
+                  value={date}
+                  onChange={e => setDate(e.target.value)}
+                  className="w-full pl-10 pr-4 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">Description (Optional)</label>
+            <textarea 
+              value={description}
+              onChange={e => setDescription(e.target.value)}
+              className="w-full px-4 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none resize-none"
+              rows={3}
+              placeholder="Source of income..."
+            />
+          </div>
+
+          <div className="pt-4 flex gap-3">
+            <button 
+              type="button" 
+              onClick={onClose}
+              className="flex-1 px-4 py-2 border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50 transition-colors font-medium"
+            >
+              Cancel
+            </button>
+            <button 
+              type="submit"
+              className="flex-1 px-4 py-2 bg-emerald-600 text-white rounded-xl hover:bg-emerald-700 transition-colors font-medium shadow-lg shadow-emerald-200"
+            >
+              Save Income
+            </button>
+          </div>
+        </form>
+      </motion.div>
+    </div>
+  );
+}
+
 function AppContent() {
-  const { user, loading } = useAuth();
+  const { user, profile, loading } = useAuth();
   const [view, setView] = useState<'dashboard' | 'pricing'>('dashboard');
+
+  const isTrialExpired = useMemo(() => {
+    if (!profile?.trialStartedAt || profile?.plan === 'pro') return false;
+    const start = profile.trialStartedAt.toDate();
+    const now = new Date();
+    const diff = now.getTime() - start.getTime();
+    const days = diff / (1000 * 60 * 60 * 24);
+    return days > 7;
+  }, [profile]);
 
   if (loading) {
     return (
@@ -914,6 +1228,30 @@ function AppContent() {
   }
 
   if (!user) return <Login />;
+
+  if (isTrialExpired && view !== 'pricing') {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+        <motion.div 
+          initial={{ opacity: 0, scale: 0.9 }}
+          animate={{ opacity: 1, scale: 1 }}
+          className="max-w-md w-full bg-white p-8 rounded-3xl shadow-xl text-center border border-slate-100"
+        >
+          <div className="w-20 h-20 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center mx-auto mb-6">
+            <AlertCircle className="w-10 h-10" />
+          </div>
+          <h2 className="text-2xl font-bold text-slate-900 mb-2">Trial Expired</h2>
+          <p className="text-slate-500 mb-8">Your 7-day free trial has ended. Please upgrade to Pro to continue tracking your expenses and managing your finances.</p>
+          <button 
+            onClick={() => setView('pricing')}
+            className="w-full py-4 bg-blue-600 text-white rounded-2xl font-bold hover:bg-blue-700 transition-all shadow-lg shadow-blue-200"
+          >
+            View Pricing Plans
+          </button>
+        </motion.div>
+      </div>
+    );
+  }
 
   return view === 'pricing' ? (
     <Pricing onBack={() => setView('dashboard')} />
