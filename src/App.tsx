@@ -17,7 +17,10 @@ import {
   updateDoc, 
   Timestamp, 
   setDoc,
-  getDoc
+  getDoc,
+  getDocs,
+  orderBy,
+  limit
 } from 'firebase/firestore';
 import { 
   Plus, 
@@ -33,7 +36,11 @@ import {
   AlertCircle,
   ChevronDown,
   ChevronUp,
-  Filter
+  Filter,
+  Users,
+  ShieldCheck,
+  Settings,
+  ArrowLeft
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { format } from 'date-fns';
@@ -433,6 +440,10 @@ function Pricing({ onBack }: { onBack: () => void }) {
       <button onClick={onBack} className="mt-8 text-slate-400 hover:text-slate-600 flex items-center gap-2">
         <X className="w-4 h-4" /> Cancel and return to dashboard
       </button>
+
+      <p className="mt-12 text-slate-400 text-xs">
+        Designed and developed by <a href="mailto:serin.thomas@outlook.com" className="text-blue-600 hover:underline">serin.thomas@outlook.com</a>
+      </p>
     </div>
   );
 }
@@ -467,7 +478,7 @@ function Login() {
             <DollarSign className="w-8 h-8 text-white" />
           </div>
           <h1 className="text-3xl font-bold text-slate-900">SpendWise</h1>
-          <p className="text-slate-500 mt-2">Professional Multi-Tenant Expense Tracker</p>
+          <p className="text-slate-500 mt-2">Smart expense tracking for a better financial future.</p>
         </div>
         
         {error && (
@@ -486,14 +497,14 @@ function Login() {
         </button>
         
         <p className="text-center text-xs text-slate-400 mt-8">
-          Secure, private, and isolated data for every user.
+          Designed and developed by <a href="mailto:serin.thomas@outlook.com" className="text-blue-600 hover:underline">serin.thomas@outlook.com</a>
         </p>
       </motion.div>
     </div>
   );
 }
 
-function Dashboard({ onShowPricing }: { onShowPricing: () => void }) {
+function Dashboard({ onShowPricing, onShowAdmin }: { onShowPricing: () => void, onShowAdmin: () => void }) {
   const { user, profile, logout } = useAuth();
   const [categories, setCategories] = useState<Category[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
@@ -570,26 +581,32 @@ function Dashboard({ onShowPricing }: { onShowPricing: () => void }) {
           </div>
           
           <div className="flex items-center gap-4">
-            {profile?.plan === 'free' ? (
-              <button 
-                onClick={onShowPricing}
-                className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-amber-100 text-amber-700 rounded-lg hover:bg-amber-200 transition-colors text-xs font-bold border border-amber-200"
-              >
-                <TrendingUp className="w-3.5 h-3.5" /> Upgrade to Pro
-              </button>
-            ) : (
-              <div className="flex items-center gap-2">
-                <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-emerald-50 text-emerald-700 rounded-lg border border-emerald-100 text-xs font-bold">
-                  <Calendar className="w-3.5 h-3.5" /> {daysLeft} days left
-                </div>
+            <div className="flex items-center gap-2">
+              <div className={cn(
+                "hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-bold",
+                profile?.plan === 'pro' ? "bg-emerald-50 text-emerald-700 border-emerald-100" : "bg-amber-50 text-amber-700 border-amber-100"
+              )}>
+                <Tag className="w-3.5 h-3.5" /> 
+                {profile?.plan === 'pro' ? 'PRO PLAN' : 'FREE TRIAL'}
+                {profile?.plan === 'free' && ` (${daysLeft} days left)`}
+                {profile?.plan === 'pro' && daysLeft !== null && ` (${daysLeft} days left)`}
+              </div>
+              {profile?.plan === 'free' ? (
+                <button 
+                  onClick={onShowPricing}
+                  className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-xs font-bold shadow-sm"
+                >
+                  <TrendingUp className="w-3.5 h-3.5" /> Upgrade
+                </button>
+              ) : (
                 <button 
                   onClick={onShowPricing}
                   className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 transition-colors text-xs font-bold border border-blue-200"
                 >
                   Renew
                 </button>
-              </div>
-            )}
+              )}
+            </div>
             <div className="flex items-center gap-2 mr-2">
               <img 
                 src={user?.photoURL || ''} 
@@ -597,9 +614,19 @@ function Dashboard({ onShowPricing }: { onShowPricing: () => void }) {
                 alt={user?.displayName || ''} 
                 referrerPolicy="no-referrer"
               />
-              <span className="text-sm font-medium text-slate-700 hidden md:block">
-                {user?.displayName}
-              </span>
+              <div className="flex flex-col items-start">
+                <span className="text-sm font-bold text-slate-700 hidden md:block leading-none">
+                  {user?.displayName}
+                </span>
+                {(profile?.role === 'admin' || profile?.email === 'serinit21@gmail.com') && (
+                  <button 
+                    onClick={onShowAdmin}
+                    className="text-[10px] text-blue-600 font-bold hover:underline leading-none mt-1"
+                  >
+                    ADMIN PANEL
+                  </button>
+                )}
+              </div>
             </div>
             <button 
               onClick={logout}
@@ -917,6 +944,23 @@ function Dashboard({ onShowPricing }: { onShowPricing: () => void }) {
         </div>
       </main>
 
+      <footer className="bg-white border-t border-slate-200 py-8 mt-12">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+          <div className="flex items-center justify-center gap-2 mb-4">
+            <div className="w-6 h-6 bg-slate-200 rounded flex items-center justify-center">
+              <DollarSign className="w-4 h-4 text-slate-600" />
+            </div>
+            <span className="text-sm font-bold text-slate-900">SpendWise</span>
+          </div>
+          <p className="text-slate-500 text-sm">
+            Designed and developed by <a href="mailto:serin.thomas@outlook.com" className="text-blue-600 hover:underline">serin.thomas@outlook.com</a>
+          </p>
+          <p className="text-slate-400 text-xs mt-2">
+            © {new Date().getFullYear()} SpendWise. All rights reserved.
+          </p>
+        </div>
+      </footer>
+
       {/* Modals */}
       <AnimatePresence>
         {isAddingExpense && (
@@ -1206,18 +1250,218 @@ function IncomeModal({ onClose, user }: { onClose: () => void, user: User }) {
   );
 }
 
+function AdminDashboard({ onBack }: { onBack: () => void }) {
+  const [users, setUsers] = useState<UserProfile[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [searchTerm, setSearchTerm] = useState('');
+
+  useEffect(() => {
+    const fetchUsers = async () => {
+      try {
+        const q = query(collection(db, 'users'), orderBy('email'));
+        const snap = await getDocs(q);
+        setUsers(snap.docs.map(d => d.data() as UserProfile));
+      } catch (err) {
+        console.error("Error fetching users:", err);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchUsers();
+  }, []);
+
+  const filteredUsers = users.filter(u => 
+    u.email.toLowerCase().includes(searchTerm.toLowerCase()) || 
+    u.displayName?.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
+  const stats = useMemo(() => {
+    const total = users.length;
+    const pro = users.filter(u => u.plan === 'pro').length;
+    const active = users.filter(u => u.subscriptionStatus === 'active').length;
+    return { total, pro, active };
+  }, [users]);
+
+  const handleUpdatePlan = async (userId: string, plan: 'free' | 'pro') => {
+    try {
+      await updateDoc(doc(db, 'users', userId), { 
+        plan,
+        subscriptionStatus: plan === 'pro' ? 'active' : 'inactive'
+      });
+      setUsers(prev => prev.map(u => u.uid === userId ? { ...u, plan, subscriptionStatus: plan === 'pro' ? 'active' : 'inactive' } : u));
+    } catch (err) {
+      alert("Failed to update plan");
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-50">
+      <header className="bg-white border-b border-slate-200 sticky top-0 z-30">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <button onClick={onBack} className="p-2 hover:bg-slate-100 rounded-lg transition-colors">
+              <ArrowLeft className="w-5 h-5 text-slate-600" />
+            </button>
+            <div className="flex items-center gap-2">
+              <ShieldCheck className="w-6 h-6 text-blue-600" />
+              <h1 className="text-xl font-bold text-slate-900">Admin Panel</h1>
+            </div>
+          </div>
+          <div className="text-sm text-slate-500 font-medium">
+            Manage Subscribers & Users
+          </div>
+        </div>
+      </header>
+
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* Admin Stats */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+          <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+            <div className="flex items-center gap-4 mb-2">
+              <div className="p-2 bg-blue-50 rounded-lg">
+                <Users className="w-5 h-5 text-blue-600" />
+              </div>
+              <span className="text-sm font-medium text-slate-500">Total Users</span>
+            </div>
+            <div className="text-2xl font-bold text-slate-900">{stats.total}</div>
+          </div>
+          <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+            <div className="flex items-center gap-4 mb-2">
+              <div className="p-2 bg-emerald-50 rounded-lg">
+                <Tag className="w-5 h-5 text-emerald-600" />
+              </div>
+              <span className="text-sm font-medium text-slate-500">Pro Subscribers</span>
+            </div>
+            <div className="text-2xl font-bold text-slate-900">{stats.pro}</div>
+          </div>
+          <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+            <div className="flex items-center gap-4 mb-2">
+              <div className="p-2 bg-amber-50 rounded-lg">
+                <TrendingUp className="w-5 h-5 text-amber-600" />
+              </div>
+              <span className="text-sm font-medium text-slate-500">Active Subscriptions</span>
+            </div>
+            <div className="text-2xl font-bold text-slate-900">{stats.active}</div>
+          </div>
+        </div>
+
+        {/* User Management Table */}
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+          <div className="p-6 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <h2 className="text-lg font-bold text-slate-900">User Directory</h2>
+            <div className="relative max-w-xs w-full">
+              <Filter className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+              <input 
+                type="text" 
+                placeholder="Search users..."
+                value={searchTerm}
+                onChange={e => setSearchTerm(e.target.value)}
+                className="w-full pl-10 pr-4 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none text-sm"
+              />
+            </div>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-left">
+              <thead>
+                <tr className="bg-slate-50 text-slate-500 text-xs font-bold uppercase tracking-wider">
+                  <th className="px-6 py-4">User</th>
+                  <th className="px-6 py-4">Plan</th>
+                  <th className="px-6 py-4">Status</th>
+                  <th className="px-6 py-4">Expiry</th>
+                  <th className="px-6 py-4">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {loading ? (
+                  <tr>
+                    <td colSpan={5} className="px-6 py-12 text-center">
+                      <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto" />
+                    </td>
+                  </tr>
+                ) : filteredUsers.length > 0 ? filteredUsers.map(u => (
+                  <tr key={u.uid} className="hover:bg-slate-50 transition-colors">
+                    <td className="px-6 py-4">
+                      <div className="flex flex-col">
+                        <span className="text-sm font-bold text-slate-900">{u.displayName || 'No Name'}</span>
+                        <span className="text-xs text-slate-500">{u.email}</span>
+                      </div>
+                    </td>
+                    <td className="px-6 py-4">
+                      <span className={cn(
+                        "px-2 py-1 rounded-full text-[10px] font-bold uppercase",
+                        u.plan === 'pro' ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600"
+                      )}>
+                        {u.plan || 'free'}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4">
+                      <span className={cn(
+                        "flex items-center gap-1.5 text-xs font-medium",
+                        u.subscriptionStatus === 'active' ? "text-emerald-600" : "text-slate-400"
+                      )}>
+                        <div className={cn("w-1.5 h-1.5 rounded-full", u.subscriptionStatus === 'active' ? "bg-emerald-600" : "bg-slate-400")} />
+                        {u.subscriptionStatus || 'inactive'}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 text-sm text-slate-600">
+                      {u.subscriptionEndDate ? format(u.subscriptionEndDate.toDate(), 'MMM dd, yyyy') : 'N/A'}
+                    </td>
+                    <td className="px-6 py-4">
+                      <div className="flex items-center gap-2">
+                        <button 
+                          onClick={() => handleUpdatePlan(u.uid, u.plan === 'pro' ? 'free' : 'pro')}
+                          className="p-2 hover:bg-slate-200 rounded-lg text-slate-600 transition-colors"
+                          title={u.plan === 'pro' ? 'Downgrade to Free' : 'Upgrade to Pro'}
+                        >
+                          <Settings className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                )) : (
+                  <tr>
+                    <td colSpan={5} className="px-6 py-12 text-center text-slate-400 italic">
+                      No users found matching your search.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </main>
+
+      <footer className="bg-white border-t border-slate-200 py-8 mt-12">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+          <p className="text-slate-500 text-sm">
+            SpendWise Admin Console
+          </p>
+          <p className="text-slate-400 text-xs mt-2">
+            Designed and developed by <a href="mailto:serin.thomas@outlook.com" className="text-blue-600 hover:underline">serin.thomas@outlook.com</a>
+          </p>
+        </div>
+      </footer>
+    </div>
+  );
+}
+
 function AppContent() {
   const { user, profile, loading } = useAuth();
-  const [view, setView] = useState<'dashboard' | 'pricing'>('dashboard');
+  const [view, setView] = useState<'dashboard' | 'pricing' | 'admin'>('dashboard');
+
+  const isAdmin = useMemo(() => {
+    return profile?.role === 'admin' || profile?.email === 'serinit21@gmail.com';
+  }, [profile]);
 
   const isTrialExpired = useMemo(() => {
-    if (!profile?.trialStartedAt || profile?.plan === 'pro') return false;
+    if (!profile?.trialStartedAt || profile?.plan === 'pro' || isAdmin) return false;
     const start = profile.trialStartedAt.toDate();
     const now = new Date();
     const diff = now.getTime() - start.getTime();
     const days = diff / (1000 * 60 * 60 * 24);
     return days > 7;
-  }, [profile]);
+  }, [profile, isAdmin]);
 
   if (loading) {
     return (
@@ -1229,7 +1473,7 @@ function AppContent() {
 
   if (!user) return <Login />;
 
-  if (isTrialExpired && view !== 'pricing') {
+  if (isTrialExpired && view !== 'pricing' && view !== 'admin') {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
         <motion.div 
@@ -1253,10 +1497,12 @@ function AppContent() {
     );
   }
 
+  if (view === 'admin') return <AdminDashboard onBack={() => setView('dashboard')} />;
+
   return view === 'pricing' ? (
     <Pricing onBack={() => setView('dashboard')} />
   ) : (
-    <Dashboard onShowPricing={() => setView('pricing')} />
+    <Dashboard onShowPricing={() => setView('pricing')} onShowAdmin={() => setView('admin')} />
   );
 }
 
